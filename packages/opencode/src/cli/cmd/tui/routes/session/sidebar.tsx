@@ -1,5 +1,5 @@
 import { useSync } from "@tui/context/sync"
-import { createMemo, For, Show, Switch, Match } from "solid-js"
+import { createMemo, createResource, For, Show, Switch, Match } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useTheme } from "../../context/theme"
 import { Locale } from "@/util/locale"
@@ -10,7 +10,9 @@ import { Installation } from "@/installation"
 import { useKeybind } from "../../context/keybind"
 import { useDirectory } from "../../context/directory"
 import { useKV } from "../../context/kv"
+import { useSDK } from "../../context/sdk"
 import { TodoItem } from "../../component/todo-item"
+import { InstructionPrompt } from "@/session/instruction"
 
 export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
   const sync = useSync()
@@ -25,6 +27,7 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
     diff: true,
     todo: true,
     lsp: true,
+    context: true,
   })
 
   // Sort MCP servers alphabetically for consistent display order
@@ -62,6 +65,68 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
 
   const directory = useDirectory()
   const kv = useKV()
+  const sdk = useSDK()
+  const [systemInstructions] = createResource(() =>
+    sdk.client.experimental.instruction
+      .list()
+      .then((x) => x.data ?? [])
+      .catch(() => []),
+  )
+  const rootPath = createMemo(() => sync.data.path.directory || process.cwd())
+
+  const contextFiles = createMemo(() => {
+    const root = rootPath()
+    if (!root) return []
+    const result = new Set<string>()
+    const list = messages()
+    const withParts = list.map((info) => ({
+      info,
+      parts: sync.data.part[info.id] ?? [],
+    }))
+
+    for (const msg of withParts) {
+      for (const part of msg.parts) {
+        if (part.type !== "tool") continue
+        if (part.tool !== "read") continue
+        if (part.state.status !== "completed") continue
+        if (part.state.time.compacted) continue
+        const input = part.state.input as { filePath?: string } | undefined
+        if (typeof input?.filePath === "string") {
+          result.add(input.filePath)
+        }
+      }
+    }
+
+    for (const file of InstructionPrompt.loaded(withParts as Parameters<typeof InstructionPrompt.loaded>[0])) {
+      result.add(file)
+    }
+
+    const systemPaths = systemInstructions() ?? []
+    const systemSet = new Set<string>()
+    const projectSet = new Set<string>()
+    for (const item of systemPaths) {
+      result.add(item.path)
+      const resolved = path.resolve(item.path)
+      if (item.source === "project") {
+        projectSet.add(resolved)
+        continue
+      }
+      systemSet.add(resolved)
+    }
+
+    return Array.from(result)
+      .map((file) => {
+        const resolved = path.isAbsolute(file) ? file : path.resolve(root, file)
+        const relative = path.relative(root, resolved)
+        const label = !relative || relative.startsWith("..") ? file : relative
+        return {
+          label,
+          system: systemSet.has(resolved),
+          project: projectSet.has(resolved),
+        }
+      })
+      .sort((a, b) => a.label.localeCompare(b.label))
+  })
 
   const hasProviders = createMemo(() =>
     sync.data.provider.some((x) => x.id !== "opencode" || Object.values(x.models).some((y) => y.cost?.input !== 0)),
@@ -202,6 +267,43 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
                 </For>
               </Show>
             </box>
+            <Show when={contextFiles().length > 0}>
+              <box>
+                <box
+                  flexDirection="row"
+                  gap={1}
+                  onMouseDown={() => contextFiles().length > 2 && setExpanded("context", !expanded.context)}
+                >
+                  <Show when={contextFiles().length > 2}>
+                    <text fg={theme.text}>{expanded.context ? "▼" : "▶"}</text>
+                  </Show>
+                  <text fg={theme.text}>
+                    <b>Context Files</b>
+                    <Show when={!expanded.context}>
+                      <span style={{ fg: theme.textMuted }}> ({contextFiles().length})</span>
+                    </Show>
+                  </text>
+                </box>
+                <Show when={contextFiles().length <= 2 || expanded.context}>
+                  <For each={contextFiles()}>
+                    {(item) => (
+                      <box flexDirection="row" gap={1}>
+                        <text fg={theme.textMuted}>•</text>
+                        <text fg={theme.textMuted} wrapMode="word">
+                          {item.label}
+                          <Show when={item.project}>
+                            <span style={{ fg: theme.textMuted }}> (project)</span>
+                          </Show>
+                          <Show when={!item.project && item.system}>
+                            <span style={{ fg: theme.textMuted }}> (global)</span>
+                          </Show>
+                        </text>
+                      </box>
+                    )}
+                  </For>
+                </Show>
+              </box>
+            </Show>
             <Show when={todo().length > 0 && todo().some((t) => t.status !== "completed")}>
               <box>
                 <box

@@ -69,15 +69,24 @@ export namespace InstructionPrompt {
   }
 
   export async function systemPaths() {
-    const config = await Config.get()
+    const entries = await systemEntries()
     const paths = new Set<string>()
+    for (const entry of entries) {
+      paths.add(entry.path)
+    }
+    return paths
+  }
+
+  export async function systemEntries() {
+    const config = await Config.get()
+    const entries: { path: string; source: "project" | "global" | "config" }[] = []
 
     if (!Flag.OPENCODE_DISABLE_PROJECT_CONFIG) {
       for (const file of FILES) {
         const matches = await Filesystem.findUp(file, Instance.directory, Instance.worktree)
         if (matches.length > 0) {
           matches.forEach((p) => {
-            paths.add(path.resolve(p))
+            entries.push({ path: path.resolve(p), source: "project" })
           })
           break
         }
@@ -86,7 +95,7 @@ export namespace InstructionPrompt {
 
     for (const file of globalFiles()) {
       if (await Bun.file(file).exists()) {
-        paths.add(path.resolve(file))
+        entries.push({ path: path.resolve(file), source: "global" })
         break
       }
     }
@@ -107,12 +116,17 @@ export namespace InstructionPrompt {
             ).catch(() => [])
           : await resolveRelative(instruction)
         matches.forEach((p) => {
-          paths.add(path.resolve(p))
+          entries.push({ path: path.resolve(p), source: "config" })
         })
       }
     }
 
-    return paths
+    const uniq = new Map<string, { path: string; source: "project" | "global" | "config" }>()
+    for (const entry of entries) {
+      if (!uniq.has(entry.path)) uniq.set(entry.path, entry)
+    }
+
+    return Array.from(uniq.values())
   }
 
   export async function system() {

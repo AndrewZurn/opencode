@@ -24,6 +24,7 @@ import type {
   EventTuiPromptAppend,
   EventTuiSessionSelect,
   EventTuiToastShow,
+  ExperimentalInstructionListResponses,
   ExperimentalResourceListResponses,
   FileListResponses,
   FilePartInput,
@@ -898,6 +899,27 @@ export class Worktree extends HeyApiClient {
   }
 }
 
+export class Instruction extends HeyApiClient {
+  /**
+   * List instruction files
+   *
+   * List instruction files injected into the system prompt.
+   */
+  public list<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams([parameters], [{ args: [{ in: "query", key: "directory" }] }])
+    return (options?.client ?? this.client).get<ExperimentalInstructionListResponses, unknown, ThrowOnError>({
+      url: "/experimental/instruction",
+      ...options,
+      ...params,
+    })
+  }
+}
+
 export class Resource extends HeyApiClient {
   /**
    * Get MCP resources
@@ -920,6 +942,11 @@ export class Resource extends HeyApiClient {
 }
 
 export class Experimental extends HeyApiClient {
+  private _instruction?: Instruction
+  get instruction(): Instruction {
+    return (this._instruction ??= new Instruction({ client: this.client }))
+  }
+
   private _resource?: Resource
   get resource(): Resource {
     return (this._resource ??= new Resource({ client: this.client }))

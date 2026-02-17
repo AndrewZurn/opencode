@@ -9,6 +9,7 @@ import { MCP } from "../../mcp"
 import { zodToJsonSchema } from "zod-to-json-schema"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
+import { InstructionPrompt } from "../../session/instruction"
 
 export const ExperimentalRoutes = lazy(() =>
   new Hono()
@@ -182,6 +183,35 @@ export const ExperimentalRoutes = lazy(() =>
         const body = c.req.valid("json")
         await Worktree.reset(body)
         return c.json(true)
+      },
+    )
+    .get(
+      "/instruction",
+      describeRoute({
+        summary: "List instruction files",
+        description: "List instruction files injected into the system prompt.",
+        operationId: "experimental.instruction.list",
+        responses: {
+          200: {
+            description: "Instruction files",
+            content: {
+              "application/json": {
+                schema: resolver(
+                  z.array(
+                    z.object({
+                      path: z.string(),
+                      source: z.enum(["project", "global", "config"]),
+                    }),
+                  ),
+                ),
+              },
+            },
+          },
+        },
+      }),
+      async (c) => {
+        const entries = await InstructionPrompt.systemEntries()
+        return c.json(entries)
       },
     )
     .get(

@@ -2870,6 +2870,28 @@ export type WorktreeResetResponses = {
 
 export type WorktreeResetResponse = WorktreeResetResponses[keyof WorktreeResetResponses]
 
+export type ExperimentalInstructionListData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+  }
+  url: "/experimental/instruction"
+}
+
+export type ExperimentalInstructionListResponses = {
+  /**
+   * Instruction files
+   */
+  200: Array<{
+    path: string
+    source: "project" | "global" | "config"
+  }>
+}
+
+export type ExperimentalInstructionListResponse =
+  ExperimentalInstructionListResponses[keyof ExperimentalInstructionListResponses]
+
 export type ExperimentalResourceListData = {
   body?: never
   path?: never
