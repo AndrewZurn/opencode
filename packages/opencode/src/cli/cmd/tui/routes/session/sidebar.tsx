@@ -1,5 +1,5 @@
 import { useSync } from "@tui/context/sync"
-import { createMemo, For, Show, Switch, Match } from "solid-js"
+import { createMemo, createResource, For, Show, Switch, Match } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useTheme } from "../../context/theme"
 import { Locale } from "@/util/locale"
@@ -19,12 +19,14 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
   const diff = createMemo(() => sync.data.session_diff[props.sessionID] ?? [])
   const todo = createMemo(() => sync.data.todo[props.sessionID] ?? [])
   const messages = createMemo(() => sync.data.message[props.sessionID] ?? [])
+  const parts = createMemo(() => messages().flatMap((msg) => sync.data.part[msg.id] ?? []))
 
   const [expanded, setExpanded] = createStore({
     mcp: true,
     diff: true,
     todo: true,
     lsp: true,
+    contextFiles: true,
   })
 
   // Sort MCP servers alphabetically for consistent display order
@@ -63,10 +65,82 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
   const directory = useDirectory()
   const kv = useKV()
 
+  const [systemFiles] = createResource(
+    () => ({
+      directory: sync.data.path.directory || process.cwd(),
+    }),
+    async (input) => {
+      const results: string[] = []
+      const files = ["AGENTS.md", "CLAUDE.md", "CONTEXT.md"]
+      let current = path.resolve(input.directory)
+      while (true) {
+        for (const name of files) {
+          const target = path.join(current, name)
+          if (await Bun.file(target).exists()) results.push(target)
+        }
+        const next = path.dirname(current)
+        if (next === current) break
+        current = next
+      }
+
+      const globalAgent = path.join(Global.Path.config, "AGENTS.md")
+      if (await Bun.file(globalAgent).exists()) results.push(globalAgent)
+      const claudeAgent = path.join(Global.Path.home, ".claude", "CLAUDE.md")
+      if (await Bun.file(claudeAgent).exists()) results.push(claudeAgent)
+
+      return Array.from(new Set(results))
+    },
+  )
+
   const hasProviders = createMemo(() =>
     sync.data.provider.some((x) => x.id !== "opencode" || Object.values(x.models).some((y) => y.cost?.input !== 0)),
   )
   const gettingStartedDismissed = createMemo(() => kv.get("dismissed_getting_started", false))
+
+  const contextFiles = createMemo(() => {
+    const root = sync.data.path.directory || process.cwd()
+    const entries = new Map<string, { path: string; system: boolean }>()
+    const add = (filepath: string, system: boolean) => {
+      const resolved = path.isAbsolute(filepath) ? filepath : path.resolve(root, filepath)
+      const existing = entries.get(resolved)
+      if (!existing) {
+        entries.set(resolved, { path: resolved, system })
+        return
+      }
+      if (system && !existing.system) entries.set(resolved, { path: resolved, system: true })
+    }
+
+    const systemNames = new Set(["AGENTS.md", "CLAUDE.md", "CONTEXT.md"])
+
+    for (const part of parts()) {
+      if (part.type !== "tool" || part.tool !== "read" || part.state.status !== "completed") continue
+      if (part.state.time.compacted) continue
+      const filePath = part.state.input?.filePath
+      if (typeof filePath === "string") {
+        const name = path.basename(filePath)
+        add(filePath, systemNames.has(name))
+      }
+      const loaded = part.state.metadata?.loaded
+      if (Array.isArray(loaded)) {
+        for (const file of loaded) {
+          if (typeof file === "string") add(file, true)
+        }
+      }
+    }
+
+    const system = systemFiles() ?? []
+    for (const file of system) add(file, true)
+
+    return Array.from(entries.values())
+      .map((entry) => {
+        const rel = path.relative(root, entry.path)
+        return {
+          label: rel.length > 0 && !rel.startsWith("..") ? rel : entry.path,
+          system: entry.system,
+        }
+      })
+      .sort((a, b) => a.label.localeCompare(b.label))
+  })
 
   return (
     <Show when={session()}>
@@ -258,6 +332,38 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
                 </Show>
               </box>
             </Show>
+            <box>
+              <box
+                flexDirection="row"
+                gap={1}
+                onMouseDown={() => contextFiles().length > 2 && setExpanded("contextFiles", !expanded.contextFiles)}
+              >
+                <Show when={contextFiles().length > 2}>
+                  <text fg={theme.text}>{expanded.contextFiles ? "▼" : "▶"}</text>
+                </Show>
+                <text fg={theme.text}>
+                  <b>Context Files</b>
+                  <Show when={!expanded.contextFiles && contextFiles().length > 0}>
+                    <span style={{ fg: theme.textMuted }}> ({contextFiles().length} files)</span>
+                  </Show>
+                </text>
+              </box>
+              <Show when={contextFiles().length === 0}>
+                <text fg={theme.textMuted}>No context files loaded yet</text>
+              </Show>
+              <Show when={contextFiles().length <= 2 || expanded.contextFiles}>
+                <For each={contextFiles()}>
+                  {(item) => (
+                    <text fg={theme.textMuted} wrapMode="word" width="100%">
+                      {item.label}
+                      <Show when={item.system}>
+                        <span style={{ fg: theme.textMuted }}> (system)</span>
+                      </Show>
+                    </text>
+                  )}
+                </For>
+              </Show>
+            </box>
           </box>
         </scrollbox>
 
